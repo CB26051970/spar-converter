@@ -21,11 +21,11 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install pandas openpyxl pyinstaller
+        pip install pandas openpyxl pyinstaller pdfplumber Pillow
 
     - name: Build executable
       run: |
-        pyinstaller --onefile --windowed --name=SparConverter --hidden-import=pandas --hidden-import=openpyxl --hidden-import=tkinter main.py
+        pyinstaller --onefile --windowed --name=SparConverter --hidden-import=pandas --hidden-import=openpyxl --hidden-import=tkinter --hidden-import=pdfplumber --hidden-import=PIL main.py
 
     - name: Upload executable
       uses: actions/upload-artifact@v4
