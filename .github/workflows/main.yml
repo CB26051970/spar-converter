@@ -1,38 +1,65 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from converter import SparConverter
-import os
+name: Build and Release SPAR Converter
 
-def select_file(title, file_types):
-    """Seleziona un file tramite dialog"""
-    root = tk.Tk()
-    root.withdraw()
-    file_path = filedialog.askopenfilename(title=title, filetypes=file_types)
-    root.destroy()
-    return file_path
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:  # Permette l'avvio manuale
 
-def main():
-    # Seleziona il file di conversione
-    conversion_file = select_file(
-        "Seleziona il file SPAR CONVERSION.xlsm",
-        [("Excel files", "*.xlsm"), ("All files", "*.*")]
-    )
-    
-    if not conversion_file:
-        return
-    
-    # Seleziona il file da convertire
-    input_file = select_file(
-        "Seleziona il file Excel da convertire",
-        [("Excel files", "*.xlsx"), ("All files", "*.*")]
-    )
-    
-    if not input_file:
-        return
-    
-    # Esegue la conversione
-    converter = SparConverter(conversion_file, input_file)
-    converter.convert()
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        python-version: [3.9]
 
-if __name__ == "__main__":
-    main()
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build executable
+      run: |
+        python build.py
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: spar-converter-${{ matrix.os }}
+        path: dist/
+        retention-days: 30
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/spar-converter-windows-latest/*
+          artifacts/spar-converter-ubuntu-latest/*
+          artifacts/spar-converter-macos-latest/*
+        draft: false
+        prerelease: false
