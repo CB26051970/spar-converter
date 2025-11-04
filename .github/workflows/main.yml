@@ -4,10 +4,10 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:  # Permette l'avvio manuale
+  workflow_dispatch:
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
     
     steps:
@@ -21,137 +21,20 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
         pip install pandas openpyxl pyinstaller
 
-    - name: Create main.py file
+    - name: Build executable
       run: |
-        # Crea la directory src se non esiste
-        if not exist src mkdir src
-        
-        # Crea il file main.py
-        echo import tkinter as tk > src\main.py
-        echo from tkinter import filedialog, messagebox >> src\main.py
-        echo import os >> src\main.py
-        echo. >> src\main.py
-        echo def select_file(title, file_types): >> src\main.py
-        echo     """Seleziona un file tramite dialog""" >> src\main.py
-        echo     root = tk.Tk() >> src\main.py
-        echo     root.withdraw() >> src\main.py
-        echo     file_path = filedialog.askopenfilename(title=title, filetypes=file_types) >> src\main.py
-        echo     root.destroy() >> src\main.py
-        echo     return file_path >> src\main.py
-        echo. >> src\main.py
-        echo def main(): >> src\main.py
-        echo     # Seleziona il file di conversione >> src\main.py
-        echo     conversion_file = select_file( >> src\main.py
-        echo         "Seleziona il file SPAR CONVERSION.xlsm", >> src\main.py
-        echo         [("Excel files", "*.xlsm"), ("All files", "*.*")] >> src\main.py
-        echo     ) >> src\main.py
-        echo. >> src\main.py
-        echo     if not conversion_file: >> src\main.py
-        echo         return >> src\main.py
-        echo. >> src\main.py
-        echo     # Seleziona il file da convertire >> src\main.py
-        echo     input_file = select_file( >> src\main.py
-        echo         "Seleziona il file Excel da convertire", >> src\main.py
-        echo         [("Excel files", "*.xlsx"), ("All files", "*.*")] >> src\main.py
-        echo     ) >> src\main.py
-        echo. >> src\main.py
-        echo     if not input_file: >> src\main.py
-        echo         return >> src\main.py
-        echo. >> src\main.py
-        echo     # Esegue la conversione >> src\main.py
-        echo     from converter import SparConverter >> src\main.py
-        echo     converter = SparConverter(conversion_file, input_file) >> src\main.py
-        echo     converter.convert() >> src\main.py
-        echo. >> src\main.py
-        echo if __name__ == "__main__": >> src\main.py
-        echo     main() >> src\main.py
+        pyinstaller --onefile --windowed --name=SparConverter --hidden-import=pandas --hidden-import=openpyxl --hidden-import=tkinter main.py
 
-    - name: Create converter.py file
-      run: |
-        echo import pandas as pd > src\converter.py
-        echo import openpyxl >> src\converter.py
-        echo from openpyxl.utils.dataframe import dataframe_to_rows >> src\converter.py
-        echo import tkinter as tk >> src\converter.py
-        echo from tkinter import simpledialog, messagebox >> src\converter.py
-        echo import os >> src\converter.py
-        echo. >> src\converter.py
-        echo class SparConverter: >> src\converter.py
-        echo     def __init__(self, conversion_file, input_file): >> src\converter.py
-        echo         self.conversion_file = conversion_file >> src\converter.py
-        echo         self.input_file = input_file >> src\converter.py
-        echo         self.ws = None >> src\converter.py
-        echo         self.start_row = None >> src\converter.py
-        echo. >> src\converter.py
-        echo     def load_workbook(self): >> src\converter.py
-        echo         """Carica il file Excel di input""" >> src\converter.py
-        echo         try: >> src\converter.py
-        echo             self.wb = openpyxl.load_workbook(self.input_file) >> src\converter.py
-        echo             self.ws = self.wb.active >> src\converter.py
-        echo             return True >> src\converter.py
-        echo         except Exception as e: >> src\converter.py
-        echo             messagebox.showerror("Errore", f"Impossibile caricare il file: {str(e)}") >> src\converter.py
-        echo             return False >> src\converter.py
-        echo. >> src\converter.py
-        echo     def pre_processing(self): >> src\converter.py
-        echo         """Esegue il pre-processing: rimuove merge, wrap text, etc.""" >> src\converter.py
-        echo         # Rimuovi tutti i merge >> src\converter.py
-        echo         for merged_range in list(self.ws.merged_cells.ranges): >> src\converter.py
-        echo             self.ws.unmerge_cells(str(merged_range)) >> src\converter.py
-        echo. >> src\converter.py
-        echo         # Rimuovi wrap text >> src\converter.py
-        echo         for row in self.ws.iter_rows(): >> src\converter.py
-        echo             for cell in row: >> src\converter.py
-        echo                 cell.alignment = openpyxl.styles.Alignment(wrap_text=False) >> src\converter.py
-        echo. >> src\converter.py
-        echo         # Imposta altezza uniforme delle righe >> src\converter.py
-        echo         for row in range(1, self.ws.max_row + 1): >> src\converter.py
-        echo             self.ws.row_dimensions[row].height = 15 >> src\converter.py
-        echo. >> src\converter.py
-        echo         # Auto-adatta le colonne >> src\converter.py
-        echo         for column in self.ws.columns: >> src\converter.py
-        echo             max_length = 0 >> src\converter.py
-        echo             column_letter = column[0].column_letter >> src\converter.py
-        echo             for cell in column: >> src\converter.py
-        echo                 try: >> src\converter.py
-        echo                     if len(str(cell.value)) > max_length: >> src\converter.py
-        echo                         max_length = len(str(cell.value)) >> src\converter.py
-        echo                 except: >> src\converter.py
-        echo                     pass >> src\converter.py
-        echo             adjusted_width = (max_length + 2) * 1.2 >> src\converter.py
-        echo             self.ws.column_dimensions[column_letter].width = adjusted_width >> src\converter.py
-        echo. >> src\converter.py
-        # ... (continua con il resto del codice della classe SparConverter)
-        # Per brevità, qui includo solo la struttura base
-
-    - name: Build Windows executable
-      run: |
-        pyinstaller --onefile --windowed --name=SparConverter src/main.py
-
-    - name: Upload Windows executable
+    - name: Upload executable
       uses: actions/upload-artifact@v4
       with:
-        name: spar-converter-windows
+        name: SparConverter
         path: dist/SparConverter.exe
-        retention-days: 30
-
-  create-release:
-    needs: build-windows
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    
-    steps:
-    - name: Download Windows executable
-      uses: actions/download-artifact@v4
-      with:
-        name: spar-converter-windows
-        path: dist
 
     - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
         files: dist/SparConverter.exe
-        draft: false
-        prerelease: false
