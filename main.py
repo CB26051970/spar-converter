@@ -22,8 +22,12 @@ class PDFConverter:
                     tables = page.extract_tables()
                     
                     for table in tables:
-                        for row in table:
-                            # Cerca righe con il formato: numero, numero, numero (Article Ref, Cases Ordered, Unit Qty)
+                        for i, row in enumerate(table):
+                            # Salta l'header della tabella
+                            if i == 0 and ("Article Ref" in str(row) or "Cases Ordered" in str(row)):
+                                continue
+                            
+                            # Cerca righe con il formato: numero, numero, numero
                             if (row and len(row) >= 3 and 
                                 row[0] and row[1] and row[2] and
                                 self._looks_like_article_data(row)):
@@ -50,7 +54,8 @@ class PDFConverter:
             return False
         
         # Il primo campo dovrebbe essere un codice articolo (solo numeri)
-        if row[0] and re.match(r'^\d+$', str(row[0]).strip()):
+        article_ref = str(row[0]).strip()
+        if article_ref and re.match(r'^\d{5,}$', article_ref):  # Almeno 5 cifre
             return True
         return False
     
@@ -65,7 +70,7 @@ class PDFConverter:
             if (re.match(r'^\d+$', article_ref) and
                 re.match(r'^\d*\.?\d+$', cases_ordered) and
                 re.match(r'^\d*\.?\d+$', unit_qty)):
-                return [article_ref, cases_ordered, unit_qty]
+                return [article_ref, float(cases_ordered), float(unit_qty)]
         except:
             pass
         return None
@@ -76,13 +81,13 @@ class PDFConverter:
         lines = text.split('\n')
         
         for line in lines:
-            # Cerca pattern: numero numero numero (articolo, cases, unità)
-            match = re.search(r'(\d+)\s+(\d+\.?\d*)\s+(\d+\.?\d*)', line.strip())
+            # Cerca pattern: numero (8+ cifre) seguito da numeri decimali
+            match = re.search(r'(\d{8,})\s+(\d+\.?\d*)\s+(\d+\.?\d*)', line.strip())
             if match:
                 article_ref = match.group(1)
                 cases_ordered = match.group(2)
                 unit_qty = match.group(3)
-                data.append([article_ref, cases_ordered, unit_qty])
+                data.append([article_ref, float(cases_ordered), float(unit_qty)])
         
         return data
     
@@ -106,7 +111,7 @@ class PDFConverter:
             # Aggiungi i dati
             for row in data:
                 if len(row) >= 3:
-                    ws.append([row[0], float(row[1]), float(row[2])])
+                    ws.append([row[0], row[1], row[2]])
             
             # Formatta le colonne
             for col in range(1, 4):
@@ -119,7 +124,7 @@ class PDFConverter:
             wb.save(temp_file)
             wb.close()
             
-            messagebox.showinfo("PDF Convertito", f"PDF convertito con successo!\nTrovati {len(data)} articoli.")
+            messagebox.showinfo("PDF Convertito", f"PDF convertito con successo!\nTrovati {len(data)} articoli.\nEsempio: {data[0][0]} - {data[0][1]} - {data[0][2]}")
             return temp_file
             
         except Exception as e:
@@ -133,8 +138,24 @@ class SparConverter:
         self.wb = None
         self.ws = None
         self.start_row = None
-        self.temp_files = []  # Traccia i file temporanei da eliminare
         
+    def debug_data(self):
+        """Mostra i dati per debug"""
+        debug_info = f"File: {os.path.basename(self.input_file)}\n"
+        debug_info += f"Righe totali: {self.ws.max_row}\n"
+        debug_info += f"Colonne totali: {self.ws.max_column}\n"
+        debug_info += f"Riga di partenza: {self.start_row}\n\n"
+        
+        debug_info += "PRIME 5 RIGHE:\n"
+        for row in range(1, min(6, self.ws.max_row + 1)):
+            row_data = []
+            for col in range(1, min(6, self.ws.max_column + 1)):
+                cell_value = self.ws.cell(row=row, column=col).value
+                row_data.append(str(cell_value))
+            debug_info += f"Riga {row}: {', '.join(row_data)}\n"
+        
+        return debug_info
+    
     def load_workbook(self):
         """Carica il file Excel di input"""
         try:
@@ -205,13 +226,20 @@ class SparConverter:
             
             # Crea un dizionario per la conversione (colonna B -> colonna C)
             conversion_dict = {}
+            debug_info = "TABELLA DI CONVERSIONE (prime 10 righe):\n"
+            
             for row in range(1, 131):  # Da riga 1 a 130
                 key_cell = conversion_ws[f'B{row}']
                 value_cell = conversion_ws[f'C{row}']
                 if key_cell.value is not None and value_cell.value is not None:
                     conversion_dict[key_cell.value] = value_cell.value
+                    if row <= 10:  # Mostra solo prime 10 righe per debug
+                        debug_info += f"Riga {row}: {key_cell.value} -> {value_cell.value}\n"
             
             conversion_wb.close()
+            
+            # Mostra debug della tabella di conversione
+            messagebox.showinfo("Debug Tabella Conversione", debug_info)
             return conversion_dict
             
         except Exception as e:
@@ -221,23 +249,38 @@ class SparConverter:
     def apply_vlookup(self, conversion_dict):
         """Applica l'equivalente di VLOOKUP nella colonna C"""
         last_row = self.ws.max_row
+        lookup_results = []
         
         for row in range(self.start_row, last_row + 1):
             try:
                 lookup_value = self.ws[f'A{row}'].value
+                original_value = lookup_value
+                
                 if lookup_value is not None:
                     # Converti a intero se possibile
                     try:
+                        if isinstance(lookup_value, str):
+                            lookup_value = lookup_value.strip()
                         lookup_int = int(lookup_value)
                         result = conversion_dict.get(lookup_int, 0)
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as e:
                         result = 0
                 else:
                     result = 0
                 
                 self.ws[f'C{row}'] = result
+                lookup_results.append(f"Riga {row}: {original_value} -> {result}")
+                
             except Exception as e:
                 self.ws[f'C{row}'] = 0
+                lookup_results.append(f"Riga {row}: ERRORE -> 0")
+        
+        # Mostra i risultati del lookup
+        results_text = "\n".join(lookup_results[:10])  # Mostra prime 10 righe
+        if len(lookup_results) > 10:
+            results_text += f"\n... e altre {len(lookup_results) - 10} righe"
+        
+        messagebox.showinfo("Risultati VLOOKUP", results_text)
     
     def insert_column_and_apply_formula(self):
         """Inserisce una colonna tra C e D e applica la formula IF"""
@@ -250,6 +293,8 @@ class SparConverter:
         multiply_4_codes = [11005101, 11005102, 11005111, 11005112, 11005107, 11005113]
         multiply_3_codes = [11005382, 11005387]
         multiply_2_codes = [11004140, 11004141]
+        
+        calculation_results = []
         
         for row in range(self.start_row, last_row + 1):
             try:
@@ -268,17 +313,30 @@ class SparConverter:
                 # Applica le moltiplicazioni come nel VBA originale
                 if code in multiply_4_codes:
                     result = value_e * 4
+                    multiplier = 4
                 elif code in multiply_3_codes:
                     result = value_e * 3
+                    multiplier = 3
                 elif code in multiply_2_codes:
                     result = value_e * 2
+                    multiplier = 2
                 else:
                     result = value_e * 1
+                    multiplier = 1
                 
                 self.ws[f'D{row}'] = result
+                calculation_results.append(f"Riga {row}: Codice {code} x {multiplier} = {result}")
                 
             except Exception as e:
                 self.ws[f'D{row}'] = 0
+                calculation_results.append(f"Riga {row}: ERRORE -> 0")
+        
+        # Mostra i risultati dei calcoli
+        if calculation_results:
+            calc_text = "\n".join(calculation_results[:10])
+            if len(calculation_results) > 10:
+                calc_text += f"\n... e altre {len(calculation_results) - 10} righe"
+            messagebox.showinfo("Risultati Calcoli", calc_text)
     
     def delete_zero_rows(self):
         """Elimina le righe con 0 nella colonna C"""
@@ -293,6 +351,11 @@ class SparConverter:
             except:
                 pass
         
+        # Mostra quali righe verranno eliminate
+        if rows_to_delete:
+            delete_info = f"Righe da eliminare (con 0 in colonna C): {rows_to_delete}"
+            messagebox.showinfo("Debug Eliminazione", delete_info)
+        
         # Elimina le righe dalla fine per evitare problemi con gli indici
         deleted_count = 0
         for row in sorted(rows_to_delete, reverse=True):
@@ -305,6 +368,10 @@ class SparConverter:
         """Esegue l'intero processo di conversione"""
         if not self.load_workbook():
             return False
+        
+        # DEBUG: Mostra i dati prima della conversione
+        debug_info = self.debug_data()
+        messagebox.showinfo("Debug Dati Input", debug_info)
         
         # PRE-STEP: Formattazione iniziale
         self.pre_processing()
@@ -360,6 +427,16 @@ class SparConverter:
             self.wb.save(output_file)
             self.wb.close()
             
+            # DEBUG: Controlla se il file finale ha dati
+            if os.path.exists(output_file):
+                final_wb = openpyxl.load_workbook(output_file)
+                final_ws = final_wb.active
+                final_row_count = final_ws.max_row
+                final_wb.close()
+                
+                final_info = f"File salvato: {output_file}\nRighe nel file finale: {final_row_count}"
+                messagebox.showinfo("Debug File Finale", final_info)
+            
             # Messaggio di completamento
             messagebox.showinfo(
                 "Automazione Completata!",
@@ -367,13 +444,7 @@ class SparConverter:
                 f"Riga di partenza: {self.start_row}\n"
                 f"Righe eliminate: {deleted_rows}\n"
                 f"File salvato come: {os.path.basename(output_file)}\n"
-                f"Percorso: {output_file}\n\n"
-                f"Operazioni completate:\n"
-                f"• Rimozione merge cells\n"
-                f"• Formattazione uniforme\n"
-                f"• Applicazione VLOOKUP\n"
-                f"• Inserimento colonna calcolo\n"
-                f"• Eliminazione righe con zero"
+                f"Percorso: {output_file}"
             )
             
             # Apri la cartella contenente il file
