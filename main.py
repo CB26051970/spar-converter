@@ -3,6 +3,85 @@ from tkinter import filedialog, messagebox, simpledialog
 import openpyxl
 import pandas as pd
 import os
+import pdfplumber
+from pathlib import Path
+
+class PDFConverter:
+    def __init__(self, pdf_file):
+        self.pdf_file = pdf_file
+        
+    def extract_data_from_pdf(self):
+        """Estrae i dati dall'ordine PDF"""
+        try:
+            with pdfplumber.open(self.pdf_file) as pdf:
+                all_data = []
+                
+                for page in pdf.pages:
+                    # Estrai le tabelle dalla pagina
+                    tables = page.extract_tables()
+                    
+                    for table in tables:
+                        for row in table:
+                            # Filtra righe vuote e header
+                            if row and len(row) >= 3:
+                                # Cerca righe con dati numerici (articoli)
+                                if (row[0] and row[0].strip() and 
+                                    any(char.isdigit() for char in str(row[0])) and
+                                    row[1] and row[2]):
+                                    all_data.append(row)
+                
+                return all_data
+                
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile leggere il PDF: {str(e)}")
+            return None
+    
+    def pdf_to_excel(self):
+        """Converte il PDF in un file Excel temporaneo"""
+        data = self.extract_data_from_pdf()
+        if not data:
+            return None
+        
+        try:
+            # Crea un nuovo workbook
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Order Data"
+            
+            # Intestazioni
+            headers = ["Article Ref", "Cases Ordered", "Unit Qty"]
+            ws.append(headers)
+            
+            # Aggiungi i dati
+            for row in data:
+                if len(row) >= 3:
+                    # Pulisci i dati
+                    clean_row = []
+                    for cell in row[:3]:  # Prendi solo le prime 3 colonne
+                        if cell:
+                            # Rimuovi spazi extra e converte virgole in punti
+                            clean_cell = str(cell).strip().replace(',', '.')
+                            clean_row.append(clean_cell)
+                        else:
+                            clean_row.append("")
+                    
+                    # Assicurati che ci siano 3 colonne
+                    while len(clean_row) < 3:
+                        clean_row.append("")
+                    
+                    ws.append(clean_row)
+            
+            # Salva il file Excel temporaneo
+            temp_file = os.path.join(os.path.dirname(self.pdf_file), 
+                                   f"temp_conversion_{os.path.basename(self.pdf_file).replace('.pdf', '.xlsx')}")
+            wb.save(temp_file)
+            wb.close()
+            
+            return temp_file
+            
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile convertire PDF in Excel: {str(e)}")
+            return None
 
 class SparConverter:
     def __init__(self, conversion_file, input_file):
@@ -65,7 +144,7 @@ class SparConverter:
         user_input = simpledialog.askstring(
             "Riga di Partenza", 
             "Inserisci il numero della riga di partenza (es. 5 o 6):", 
-            initialvalue="6"
+            initialvalue="2"
         )
         
         root.destroy()
@@ -183,7 +262,7 @@ class SparConverter:
         
         return deleted_count
     
-    def convert(self):
+    def convert(self, is_pdf_conversion=False):
         """Esegue l'intero processo di conversione"""
         if not self.load_workbook():
             return False
@@ -231,7 +310,12 @@ class SparConverter:
         
         # Salva il file convertito
         base_name = os.path.splitext(self.input_file)[0]
-        output_file = f"{base_name}_CONVERTITO.xlsx"
+        if is_pdf_conversion:
+            # Rimuovi "temp_conversion_" dal nome del file
+            clean_name = base_name.replace("temp_conversion_", "")
+            output_file = f"{clean_name}_CONVERTITO.xlsx"
+        else:
+            output_file = f"{base_name}_CONVERTITO.xlsx"
         
         try:
             self.wb.save(output_file)
@@ -276,18 +360,57 @@ def main():
         if not conversion_file:
             return
         
-        # Seleziona il file Excel da convertire
-        input_file = select_file(
-            "Seleziona il file Excel da convertire",
-            [("Excel files", "*.xlsx"), ("Excel files", "*.xls"), ("All files", "*.*")]
+        # Chiedi all'utente se vuole convertire PDF o usare Excel
+        root = tk.Tk()
+        root.withdraw()
+        
+        choice = messagebox.askquestion(
+            "Tipo di File",
+            "Vuoi convertire un file PDF o un file Excel?\n\n"
+            "• Sì = Converti PDF\n"
+            "• No = Usa file Excel esistente",
+            icon='question'
         )
+        root.destroy()
+        
+        input_file = None
+        is_pdf_conversion = False
+        
+        if choice == 'yes':
+            # Conversione PDF
+            pdf_file = select_file(
+                "Seleziona il file PDF da convertire",
+                [("PDF files", "*.pdf"), ("All files", "*.*")]
+            )
+            
+            if pdf_file:
+                messagebox.showinfo("Conversione PDF", "Sto convertendo il PDF in Excel...")
+                pdf_converter = PDFConverter(pdf_file)
+                input_file = pdf_converter.pdf_to_excel()
+                is_pdf_conversion = True
+                
+                if not input_file:
+                    return
+        else:
+            # File Excel esistente
+            input_file = select_file(
+                "Seleziona il file Excel da convertire",
+                [("Excel files", "*.xlsx"), ("Excel files", "*.xls"), ("All files", "*.*")]
+            )
         
         if not input_file:
             return
         
-        # Esegue la conversione
+        # Esegue la conversione SPAR
         converter = SparConverter(conversion_file, input_file)
-        success = converter.convert()
+        success = converter.convert(is_pdf_conversion)
+        
+        # Pulisci file temporaneo se era una conversione PDF
+        if is_pdf_conversion and input_file and os.path.exists(input_file):
+            try:
+                os.remove(input_file)
+            except:
+                pass  # Ignora errori di cancellazione
         
         if not success:
             messagebox.showerror("Errore", "La conversione non è stata completata.")
