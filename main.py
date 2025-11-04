@@ -5,30 +5,38 @@ import pandas as pd
 import os
 import pdfplumber
 from pathlib import Path
+import re
 
 class PDFConverter:
     def __init__(self, pdf_file):
         self.pdf_file = pdf_file
         
     def extract_data_from_pdf(self):
-        """Estrae i dati dall'ordine PDF"""
+        """Estrae i dati dall'ordine PDF con logica specifica per il formato GSD"""
         try:
             with pdfplumber.open(self.pdf_file) as pdf:
                 all_data = []
                 
                 for page in pdf.pages:
-                    # Estrai le tabelle dalla pagina
+                    # Prova prima con l'estrazione delle tabelle
                     tables = page.extract_tables()
                     
                     for table in tables:
                         for row in table:
-                            # Filtra righe vuote e header
-                            if row and len(row) >= 3:
-                                # Cerca righe con dati numerici (articoli)
-                                if (row[0] and row[0].strip() and 
-                                    any(char.isdigit() for char in str(row[0])) and
-                                    row[1] and row[2]):
-                                    all_data.append(row)
+                            # Cerca righe con il formato: numero, numero, numero (Article Ref, Cases Ordered, Unit Qty)
+                            if (row and len(row) >= 3 and 
+                                row[0] and row[1] and row[2] and
+                                self._looks_like_article_data(row)):
+                                clean_row = self._clean_row_data(row)
+                                if clean_row:
+                                    all_data.append(clean_row)
+                    
+                    # Se non ha trovato dati nelle tabelle, prova con l'estrazione del testo
+                    if not all_data:
+                        text = page.extract_text()
+                        if text:
+                            pdf_data = self._extract_from_text(text)
+                            all_data.extend(pdf_data)
                 
                 return all_data
                 
@@ -36,10 +44,53 @@ class PDFConverter:
             messagebox.showerror("Errore", f"Impossibile leggere il PDF: {str(e)}")
             return None
     
+    def _looks_like_article_data(self, row):
+        """Verifica se la riga sembra contenere dati di articoli"""
+        if len(row) < 3:
+            return False
+        
+        # Il primo campo dovrebbe essere un codice articolo (solo numeri)
+        if row[0] and re.match(r'^\d+$', str(row[0]).strip()):
+            return True
+        return False
+    
+    def _clean_row_data(self, row):
+        """Pulisce i dati della riga"""
+        try:
+            article_ref = str(row[0]).strip()
+            cases_ordered = str(row[1]).strip().replace(',', '.')
+            unit_qty = str(row[2]).strip().replace(',', '.')
+            
+            # Verifica che siano numeri validi
+            if (re.match(r'^\d+$', article_ref) and
+                re.match(r'^\d*\.?\d+$', cases_ordered) and
+                re.match(r'^\d*\.?\d+$', unit_qty)):
+                return [article_ref, cases_ordered, unit_qty]
+        except:
+            pass
+        return None
+    
+    def _extract_from_text(self, text):
+        """Estrae dati dal testo del PDF"""
+        data = []
+        lines = text.split('\n')
+        
+        for line in lines:
+            # Cerca pattern: numero numero numero (articolo, cases, unità)
+            match = re.search(r'(\d+)\s+(\d+\.?\d*)\s+(\d+\.?\d*)', line.strip())
+            if match:
+                article_ref = match.group(1)
+                cases_ordered = match.group(2)
+                unit_qty = match.group(3)
+                data.append([article_ref, cases_ordered, unit_qty])
+        
+        return data
+    
     def pdf_to_excel(self):
         """Converte il PDF in un file Excel temporaneo"""
         data = self.extract_data_from_pdf()
         if not data:
+            messagebox.showerror("Errore", "Nessun dato trovato nel PDF. Verifica il formato del file.")
             return None
         
         try:
@@ -55,21 +106,12 @@ class PDFConverter:
             # Aggiungi i dati
             for row in data:
                 if len(row) >= 3:
-                    # Pulisci i dati
-                    clean_row = []
-                    for cell in row[:3]:  # Prendi solo le prime 3 colonne
-                        if cell:
-                            # Rimuovi spazi extra e converte virgole in punti
-                            clean_cell = str(cell).strip().replace(',', '.')
-                            clean_row.append(clean_cell)
-                        else:
-                            clean_row.append("")
-                    
-                    # Assicurati che ci siano 3 colonne
-                    while len(clean_row) < 3:
-                        clean_row.append("")
-                    
-                    ws.append(clean_row)
+                    ws.append([row[0], float(row[1]), float(row[2])])
+            
+            # Formatta le colonne
+            for col in range(1, 4):
+                col_letter = openpyxl.utils.get_column_letter(col)
+                ws.column_dimensions[col_letter].width = 15
             
             # Salva il file Excel temporaneo
             temp_file = os.path.join(os.path.dirname(self.pdf_file), 
@@ -77,6 +119,7 @@ class PDFConverter:
             wb.save(temp_file)
             wb.close()
             
+            messagebox.showinfo("PDF Convertito", f"PDF convertito con successo!\nTrovati {len(data)} articoli.")
             return temp_file
             
         except Exception as e:
@@ -90,6 +133,7 @@ class SparConverter:
         self.wb = None
         self.ws = None
         self.start_row = None
+        self.temp_files = []  # Traccia i file temporanei da eliminare
         
     def load_workbook(self):
         """Carica il file Excel di input"""
@@ -111,12 +155,7 @@ class SparConverter:
         # 2. Rimuovi wrap text da tutte le celle
         for row in self.ws.iter_rows():
             for cell in row:
-                if cell.alignment:
-                    cell.alignment = openpyxl.styles.Alignment(
-                        wrap_text=False,
-                        vertical=cell.alignment.vertical,
-                        horizontal=cell.alignment.horizontal
-                    )
+                cell.alignment = openpyxl.styles.Alignment(wrap_text=False)
         
         # 3. Imposta altezza uniforme di 15 per tutte le righe
         for row in range(1, self.ws.max_row + 1):
@@ -143,7 +182,7 @@ class SparConverter:
         
         user_input = simpledialog.askstring(
             "Riga di Partenza", 
-            "Inserisci il numero della riga di partenza (es. 5 o 6):", 
+            "Inserisci il numero della riga di partenza (di solito 2 per file PDF convertiti):", 
             initialvalue="2"
         )
         
@@ -309,12 +348,12 @@ class SparConverter:
             self.ws.column_dimensions[col_letter].width = adjusted_width
         
         # Salva il file convertito
-        base_name = os.path.splitext(self.input_file)[0]
         if is_pdf_conversion:
-            # Rimuovi "temp_conversion_" dal nome del file
-            clean_name = base_name.replace("temp_conversion_", "")
-            output_file = f"{clean_name}_CONVERTITO.xlsx"
+            # Usa il nome originale del PDF
+            original_pdf_name = os.path.basename(self.input_file).replace('temp_conversion_', '').replace('.xlsx', '')
+            output_file = os.path.join(os.path.dirname(self.input_file), f"{original_pdf_name}_CONVERTITO.xlsx")
         else:
+            base_name = os.path.splitext(self.input_file)[0]
             output_file = f"{base_name}_CONVERTITO.xlsx"
         
         try:
@@ -327,7 +366,8 @@ class SparConverter:
                 f"Conversione terminata con successo!\n\n"
                 f"Riga di partenza: {self.start_row}\n"
                 f"Righe eliminate: {deleted_rows}\n"
-                f"File salvato come: {os.path.basename(output_file)}\n\n"
+                f"File salvato come: {os.path.basename(output_file)}\n"
+                f"Percorso: {output_file}\n\n"
                 f"Operazioni completate:\n"
                 f"• Rimozione merge cells\n"
                 f"• Formattazione uniforme\n"
@@ -335,6 +375,9 @@ class SparConverter:
                 f"• Inserimento colonna calcolo\n"
                 f"• Eliminazione righe con zero"
             )
+            
+            # Apri la cartella contenente il file
+            os.startfile(os.path.dirname(output_file))
             return True
             
         except Exception as e:
@@ -409,8 +452,9 @@ def main():
         if is_pdf_conversion and input_file and os.path.exists(input_file):
             try:
                 os.remove(input_file)
-            except:
-                pass  # Ignora errori di cancellazione
+                print(f"File temporaneo cancellato: {input_file}")
+            except Exception as e:
+                print(f"Non è stato possibile cancellare il file temporaneo: {e}")
         
         if not success:
             messagebox.showerror("Errore", "La conversione non è stata completata.")
