@@ -7,59 +7,112 @@ on:
   workflow_dispatch:  # Permette l'avvio manuale
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-        python-version: [3.9]
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pyinstaller
-
-    - name: Build executable
-      run: |
-        python build.py
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: spar-converter-${{ matrix.os }}
-        path: dist/
-        retention-days: 30
-
-  create-release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+  build-windows:
+    runs-on: windows-latest
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Build Windows executable
+      run: |
+        python build.py
+
+    - name: Upload Windows executable
+      uses: actions/upload-artifact@v4
+      with:
+        name: spar-converter-windows
+        path: dist/
+        retention-days: 30
+
+  build-linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        sudo apt-get update
+        sudo apt-get install -y python3-tk
+
+    - name: Build Linux executable
+      run: |
+        python build.py
+
+    - name: Upload Linux executable
+      uses: actions/upload-artifact@v4
+      with:
+        name: spar-converter-linux
+        path: dist/
+        retention-days: 30
+
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Build macOS executable
+      run: |
+        python build.py
+
+    - name: Upload macOS executable
+      uses: actions/upload-artifact@v4
+      with:
+        name: spar-converter-macos
+        path: dist/
+        retention-days: 30
+
+  create-release:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
         path: artifacts
 
+    - name: List files for debugging
+      run: find artifacts -type f
+
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          artifacts/spar-converter-windows-latest/*
-          artifacts/spar-converter-ubuntu-latest/*
-          artifacts/spar-converter-macos-latest/*
+          artifacts/spar-converter-windows/SparConverter.exe
+          artifacts/spar-converter-linux/SparConverter
+          artifacts/spar-converter-macos/SparConverter
         draft: false
         prerelease: false
